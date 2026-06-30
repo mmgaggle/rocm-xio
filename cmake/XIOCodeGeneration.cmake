@@ -60,7 +60,26 @@ function(setup_code_generation)
     DEPENDS ${NVME_KERNEL_HEADERS}
     COMMENT "Download NVMe headers")
 
-  # NVMe defines extraction
+  # SPDK NVMe spec header fetching (NVMe Key-Value command set definitions).
+  # The kernel header has no KV uAPI, so the standard KV opcodes/status codes
+  # come from SPDK's public nvme_spec.h instead.
+  set(SPDK_KV_FETCH_SCRIPT
+    ${CMAKE_SOURCE_DIR}/scripts/build/fetch-spdk-kv-headers.sh)
+  set(SPDK_KV_HEADERS
+    ${GEN_NVME_HEADERS_DIR}/spdk-nvme_spec.h)
+
+  add_custom_command(
+    OUTPUT ${SPDK_KV_HEADERS}
+    COMMAND ${SPDK_KV_FETCH_SCRIPT} ${GEN_NVME_HEADERS_DIR}
+    DEPENDS ${SPDK_KV_FETCH_SCRIPT}
+    COMMENT "Fetching SPDK NVMe Key-Value spec header"
+  )
+
+  add_custom_target(fetch-spdk-kv-headers
+    DEPENDS ${SPDK_KV_HEADERS}
+    COMMENT "Download SPDK NVMe Key-Value spec header")
+
+  # NVMe defines extraction (kernel NVMe defs + SPDK KV defs)
   set(NVME_EXTRACT_SCRIPT
     ${CMAKE_SOURCE_DIR}/scripts/build/extract-nvme-defines.sh)
 
@@ -69,17 +88,19 @@ function(setup_code_generation)
     COMMAND ${NVME_EXTRACT_SCRIPT}
       ${GEN_NVME_HEADERS_DIR}/linux-nvme.h
       ${GEN_NVME_EP_GENERATED}
+      ${GEN_NVME_HEADERS_DIR}/spdk-nvme_spec.h
     DEPENDS ${NVME_EXTRACT_SCRIPT}
       ${GEN_NVME_HEADERS_DIR}/linux-nvme.h
-    COMMENT "Extracting NVMe defines from kernel headers"
+      ${GEN_NVME_HEADERS_DIR}/spdk-nvme_spec.h
+    COMMENT "Extracting NVMe + SPDK KV defines from headers"
   )
 
   add_custom_target(nvme-ep-generated
     DEPENDS ${GEN_NVME_EP_GENERATED}
     COMMENT "Generate NVMe endpoint defines")
 
-  # Make nvme-ep-generated depend on fetch-nvme-headers
-  add_dependencies(nvme-ep-generated fetch-nvme-headers)
+  # Make nvme-ep-generated depend on both header fetches
+  add_dependencies(nvme-ep-generated fetch-nvme-headers fetch-spdk-kv-headers)
 
   if(CLANG_FORMAT)
     add_custom_command(
@@ -134,7 +155,7 @@ function(setup_code_generation)
 
   # Combined external headers target
   add_custom_target(fetch-external-headers
-    DEPENDS fetch-nvme-headers fetch-rdma-headers
+    DEPENDS fetch-nvme-headers fetch-spdk-kv-headers fetch-rdma-headers
     COMMENT "Fetch all external headers")
 
 endfunction()

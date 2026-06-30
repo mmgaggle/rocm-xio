@@ -7,9 +7,14 @@ set -e
 
 INPUT_FILE="$1"
 OUTPUT_FILE="$2"
+# Optional: SPDK include/spdk/nvme_spec.h, the upstream source of the NVMe
+# Key-Value Command Set opcodes/status codes (the kernel header has no KV uAPI).
+# When omitted, the KV section is skipped.
+SPDK_INPUT_FILE="$3"
 
 if [ -z "$INPUT_FILE" ] || [ -z "$OUTPUT_FILE" ]; then
-    echo "Usage: $0 <input-linux-nvme.h> <output-generated.h>"
+    echo "Usage: $0 <input-linux-nvme.h> <output-generated.h>" \
+         "[input-spdk-nvme_spec.h]"
     exit 1
 fi
 
@@ -553,6 +558,56 @@ awk '/^struct nvme_id_ns \{/,/^\};/ {
 }' "$INPUT_FILE" >> "$OUTPUT_FILE"
 
 echo "} __attribute__((packed));" >> "$OUTPUT_FILE"
+
+# ---------------------------------------------------------------------------
+# NVMe Key-Value Command Set (from SPDK: include/spdk/nvme_spec.h)
+# ---------------------------------------------------------------------------
+# The kernel header carries no KV uAPI, so the *standard* KV opcodes and status
+# codes are sourced from SPDK's public nvme_spec.h instead. Only the vendor KV
+# Exec opcode (0x83), which SPDK does not define, stays hand-written (in
+# src/include/nvme-kv.h). Skipped when no SPDK header is supplied.
+if [ -n "$SPDK_INPUT_FILE" ]; then
+    if [ ! -f "$SPDK_INPUT_FILE" ]; then
+        echo "Error: SPDK input file not found: $SPDK_INPUT_FILE"
+        exit 1
+    fi
+
+    cat >> "$OUTPUT_FILE" << 'EOF'
+
+// ===== NVMe Key-Value Command Set (from SPDK: include/spdk/nvme_spec.h) =====
+
+// Key-Value command set opcodes (from SPDK: enum spdk_nvme_kv_opcode)
+enum spdk_nvme_kv_opcode {
+EOF
+
+    # Pull the whole (small) KV opcode enum verbatim; tabs -> spaces.
+    awk '/^enum spdk_nvme_kv_opcode \{/ { f = 1; next }
+         f && /^\};/ { exit }
+         f {
+             gsub(/\t/, " ")
+             gsub(/  +/, " ")
+             gsub(/^ /, "")
+             if ($0 != "" && $0 !~ /^\/\//) print "  " $0
+         }' "$SPDK_INPUT_FILE" >> "$OUTPUT_FILE"
+
+    cat >> "$OUTPUT_FILE" << 'EOF'
+};
+
+// Key-Value status codes (SCT Generic; from SPDK:
+// enum spdk_nvme_generic_command_status_code)
+EOF
+
+    # Convert the KV status-code enum entries (0x85-0x89) to #defines, matching
+    # the kernel NVME_SC_* style emitted above.
+    awk '/SPDK_NVME_SC_INVALID_VALUE_SIZE|SPDK_NVME_SC_INVALID_KEY_SIZE|SPDK_NVME_SC_KV_KEY_DOES_NOT_EXIST|SPDK_NVME_SC_KEY_EXISTS/ {
+             gsub(/\t/, " ")
+             gsub(/^ +/, "")
+             gsub(/ *= */, " ")
+             gsub(/,.*$/, "")
+             gsub(/ +/, " ")
+             print "#define " $0
+         }' "$SPDK_INPUT_FILE" >> "$OUTPUT_FILE"
+fi
 
 cat >> "$OUTPUT_FILE" << 'EOF'
 
